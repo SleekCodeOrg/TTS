@@ -711,7 +711,7 @@ class Xtts(BaseTTS):
         super().eval()
 
     def get_compatible_checkpoint_state_dict(self, model_path):
-        checkpoint = load_fsspec(model_path, map_location=torch.device("cpu"))["model"]
+        checkpoint = load_fsspec(model_path, map_location=torch.device("cpu"), weights_only=True)["model"]
         # remove xtts gpt trainer extra keys
         ignore_keys = ["torch_mel_spectrogram_style_encoder", "torch_mel_spectrogram_dvae", "dvae"]
         for key in list(checkpoint.keys()):

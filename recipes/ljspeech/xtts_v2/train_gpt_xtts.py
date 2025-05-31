@@ -1,20 +1,27 @@
 import os
 
+import torch
 from trainer import Trainer, TrainerArgs
 
 from TTS.config.shared_configs import BaseDatasetConfig
 from TTS.tts.datasets import load_tts_samples
 from TTS.tts.layers.xtts.trainer.gpt_trainer import GPTArgs, GPTTrainer, GPTTrainerConfig, XttsAudioConfig
 from TTS.utils.manage import ModelManager
+import TTS
+
+torch.serialization.add_safe_globals([TTS.tts.configs.xtts_config.XttsConfig])
+torch.serialization.add_safe_globals([TTS.tts.configs.xtts_config.XttsAudioConfig])
+torch.serialization.add_safe_globals([TTS.tts.configs.shared_configs.BaseDatasetConfig])
+torch.serialization.add_safe_globals([TTS.tts.models.xtts.XttsArgs])
 
 # Logging parameters
-RUN_NAME = "GPT_XTTS_v2.0_LJSpeech_FT"
-PROJECT_NAME = "XTTS_trainer"
-DASHBOARD_LOGGER = "tensorboard"
+RUN_NAME = "xtts-ljspeech-test"
+PROJECT_NAME = "xtts-ljspeech-test"
+DASHBOARD_LOGGER = "wandb"
 LOGGER_URI = None
 
 # Set here the path that the checkpoints will be saved. Default: ./run/training/
-OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run", "training")
+OUT_PATH = os.path.join("../../../../../models/xtts/ljspeech/")
 
 # Training Parameters
 OPTIMIZER_WD_ONLY_ON_WEIGHTS = True  # for multi-gpu training please make it False
@@ -27,8 +34,8 @@ GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
 config_dataset = BaseDatasetConfig(
     formatter="ljspeech",
     dataset_name="ljspeech",
-    path="/raid/datasets/LJSpeech-1.1_24khz/",
-    meta_file_train="/raid/datasets/LJSpeech-1.1_24khz/metadata.csv",
+    path="/home/jjs/proj/work/tts-castalk/data/ljspeech/",
+    meta_file_train="/home/jjs/proj/work/tts-castalk/data/ljspeech/metadata.csv",
     language="en",
 )
 
@@ -72,7 +79,7 @@ if not os.path.isfile(TOKENIZER_FILE) or not os.path.isfile(XTTS_CHECKPOINT):
 
 # Training sentences generations
 SPEAKER_REFERENCE = [
-    "./tests/data/ljspeech/wavs/LJ001-0002.wav"  # speaker reference to be used in training test sentences
+    "/home/jjs/proj/work/tts-castalk/data/ljspeech/wavs/LJ001-0002.wav"  # speaker reference to be used in training test sentences
 ]
 LANGUAGE = config_dataset.language
 
