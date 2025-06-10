@@ -67,6 +67,9 @@ def callback_clearml_load_save(operation_type, model_info):
 
 
 class GPTTrainer(BaseTTS):
+    def update_training_dashboard_logger(self, batch=None, outputs=None):
+        return 
+
     def __init__(self, config: Coqpit):
         """
         Tortoise GPT training class

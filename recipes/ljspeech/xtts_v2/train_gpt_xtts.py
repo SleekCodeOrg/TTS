@@ -22,6 +22,7 @@ LOGGER_URI = None
 
 # Set here the path that the checkpoints will be saved. Default: ./run/training/
 OUT_PATH = os.path.join("../../../../../models/xtts/ljspeech/")
+os.makedirs(OUT_PATH, exist_ok=True)
 
 # Training Parameters
 OPTIMIZER_WD_ONLY_ON_WEIGHTS = True  # for multi-gpu training please make it False
@@ -34,8 +35,8 @@ GRAD_ACUMM_STEPS = 84  # set here the grad accumulation steps
 config_dataset = BaseDatasetConfig(
     formatter="ljspeech",
     dataset_name="ljspeech",
-    path="/home/jjs/proj/work/tts-castalk/data/ljspeech/",
-    meta_file_train="/home/jjs/proj/work/tts-castalk/data/ljspeech/metadata.csv",
+    path="/home/jjs/proj/tts-castalk/data/ljspeech/",
+    meta_file_train="/home/jjs/proj/tts-castalk/data/ljspeech/metadata.csv",
     language="en",
 )
 
@@ -79,8 +80,9 @@ if not os.path.isfile(TOKENIZER_FILE) or not os.path.isfile(XTTS_CHECKPOINT):
 
 # Training sentences generations
 SPEAKER_REFERENCE = [
-    "/home/jjs/proj/work/tts-castalk/data/ljspeech/wavs/LJ001-0002.wav"  # speaker reference to be used in training test sentences
+    "/home/jjs/proj/tts-castalk/data/ljspeech/wavs/LJ001-0002.wav"  # speaker reference to be used in training test sentences
 ]
+
 LANGUAGE = config_dataset.language
 
 
