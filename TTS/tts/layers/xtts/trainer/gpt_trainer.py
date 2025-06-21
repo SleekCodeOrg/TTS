@@ -52,6 +52,7 @@ class GPTArgs(XttsArgs):
     xtts_checkpoint: str = ""
     gpt_checkpoint: str = ""  # if defined it will replace the gpt weights on xtts model
     vocoder: str = ""  # overide vocoder key on the config to avoid json write issues
+    pretrained_vocoder_checkpoint: str = ""  # path to pretrained vocoder checkpoint
 
 
 def callback_clearml_load_save(operation_type, model_info):
@@ -85,6 +86,27 @@ class GPTTrainer(BaseTTS):
 
         if self.args.xtts_checkpoint:
             self.load_checkpoint(self.config, self.args.xtts_checkpoint, eval=False, strict=False)
+        elif self.args.pretrained_vocoder_checkpoint:
+            # Load only the pretrained vocoder (HifiGAN decoder) when training from scratch
+            print(">> Loading pretrained vocoder from:", self.args.pretrained_vocoder_checkpoint)
+            pretrained_state = torch.load(self.args.pretrained_vocoder_checkpoint, map_location=torch.device("cpu"))
+            if "model" in pretrained_state:
+                pretrained_state = pretrained_state["model"]
+            
+            # Extract only vocoder-related weights
+            vocoder_state = {}
+            for key, value in pretrained_state.items():
+                if "hifigan_decoder." in key:
+                    # Remove the 'xtts.' prefix if present
+                    new_key = key.replace("xtts.", "") if key.startswith("xtts.") else key
+                    vocoder_state[new_key] = value
+            
+            # Load vocoder weights
+            self.xtts.hifigan_decoder.load_state_dict(vocoder_state, strict=False)
+            print(f">> Loaded {len(vocoder_state)} vocoder parameters from pretrained checkpoint")
+            
+            # Initialize GPT model weights from scratch
+            self._init_gpt_from_scratch()
 
         # set mel stats
         if self.args.mel_norm_file:
@@ -197,6 +219,33 @@ class GPTTrainer(BaseTTS):
         self.torch_mel_spectrogram_dvae = TorchMelSpectrogram(
             mel_norm_file=self.args.mel_norm_file, sampling_rate=config.audio.dvae_sample_rate
         )
+
+    def _init_gpt_from_scratch(self):
+        """Initialize GPT model weights from scratch using standard initialization."""
+        print(">> Initializing GPT model from scratch...")
+        
+        # Initialize all GPT parameters
+        for name, param in self.xtts.gpt.named_parameters():
+            if 'weight' in name:
+                if 'ln' in name or 'norm' in name:
+                    # Layer normalization weights
+                    nn.init.ones_(param)
+                elif 'embedding' in name:
+                    # Embedding layers
+                    nn.init.normal_(param, mean=0.0, std=0.02)
+                else:
+                    # Linear and convolutional layers
+                    if param.dim() > 1:
+                        nn.init.xavier_normal_(param)
+            elif 'bias' in name:
+                if 'ln' in name or 'norm' in name:
+                    # Layer normalization biases
+                    nn.init.zeros_(param)
+                else:
+                    # Other biases
+                    nn.init.zeros_(param)
+        
+        print(">> GPT model initialized from scratch")
 
     @property
     def device(self):
