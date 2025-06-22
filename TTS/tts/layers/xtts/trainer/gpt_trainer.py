@@ -107,6 +107,8 @@ class GPTTrainer(BaseTTS):
             
             # Initialize GPT model weights from scratch
             self._init_gpt_from_scratch()
+            
+            # Note: Vocoder will be frozen after DVAE is initialized
 
         # set mel stats
         if self.args.mel_norm_file:
@@ -210,6 +212,9 @@ class GPTTrainer(BaseTTS):
             dvae_checkpoint = torch.load(self.args.dvae_checkpoint, map_location=torch.device("cpu"))
             self.dvae.load_state_dict(dvae_checkpoint, strict=False)
             print(">> DVAE weights restored from:", self.args.dvae_checkpoint)
+            # Freeze DVAE - we don't train it
+            for param in self.dvae.parameters():
+                param.requires_grad = False
         else:
             raise RuntimeError(
                 "You need to specify config.model_args.dvae_checkpoint path to be able to train the GPT decoder!!"
@@ -219,6 +224,10 @@ class GPTTrainer(BaseTTS):
         self.torch_mel_spectrogram_dvae = TorchMelSpectrogram(
             mel_norm_file=self.args.mel_norm_file, sampling_rate=config.audio.dvae_sample_rate
         )
+        
+        # Now freeze vocoder if we loaded pretrained weights
+        if self.args.pretrained_vocoder_checkpoint and not self.args.xtts_checkpoint:
+            self._freeze_vocoder()
 
     def _init_gpt_from_scratch(self):
         """Initialize GPT model weights from scratch using standard initialization."""
@@ -246,6 +255,42 @@ class GPTTrainer(BaseTTS):
                     nn.init.zeros_(param)
         
         print(">> GPT model initialized from scratch")
+
+    def _freeze_vocoder(self):
+        """Freeze the HiFiGAN vocoder to prevent training."""
+        print(">> Freezing HiFiGAN vocoder...")
+        
+        # Freeze all vocoder parameters
+        for param in self.xtts.hifigan_decoder.parameters():
+            param.requires_grad = False
+        
+        # Put vocoder in eval mode
+        self.xtts.hifigan_decoder.eval()
+        
+        # Also freeze DVAE since it's not part of the scaling research
+        for param in self.dvae.parameters():
+            param.requires_grad = False
+        self.dvae.eval()
+        
+        print(">> Vocoder and DVAE frozen")
+        
+        # Verify what's trainable
+        self._print_trainable_parameters()
+
+    def _print_trainable_parameters(self):
+        """Print statistics about trainable parameters."""
+        total_params = 0
+        trainable_params = 0
+        
+        for name, param in self.named_parameters():
+            total_params += param.numel()
+            if param.requires_grad:
+                trainable_params += param.numel()
+        
+        print(f">> Total parameters: {total_params:,}")
+        print(f">> Trainable parameters: {trainable_params:,}")
+        print(f">> Frozen parameters: {total_params - trainable_params:,}")
+        print(f">> Trainable percentage: {100 * trainable_params / total_params:.2f}%")
 
     @property
     def device(self):
@@ -375,8 +420,14 @@ class GPTTrainer(BaseTTS):
         # put gpt model in training mode
         if hasattr(trainer.model, "module") and hasattr(trainer.model.module, "xtts"):
             trainer.model.module.xtts.gpt.train()
+            # Ensure vocoder and DVAE stay frozen
+            trainer.model.module.xtts.hifigan_decoder.eval()
+            trainer.model.module.dvae.eval()
         else:
             trainer.model.xtts.gpt.train()
+            # Ensure vocoder and DVAE stay frozen
+            trainer.model.xtts.hifigan_decoder.eval()
+            trainer.model.dvae.eval()
 
     def on_init_end(self, trainer):  # pylint: disable=W0613
         # ignore similarities.pth on clearml save/upload
