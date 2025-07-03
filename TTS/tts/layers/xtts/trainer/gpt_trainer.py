@@ -115,7 +115,8 @@ class GPTTrainer(BaseTTS):
             # Initialize GPT model weights from scratch
             self._init_gpt_from_scratch()
             
-            # Note: Vocoder will be frozen after DVAE is initialized
+            # Verify GPT initialization
+            self._verify_gpt_initialization()
 
         # set mel stats
         if self.args.mel_norm_file:
@@ -238,31 +239,47 @@ class GPTTrainer(BaseTTS):
             self._freeze_vocoder()
 
     def _init_gpt_from_scratch(self):
-        """Initialize GPT model weights from scratch using standard initialization."""
+        """Initialize GPT model weights from scratch using GPT-2 style initialization."""
         print(">> Initializing GPT model from scratch...")
+        
+        # Standard deviation for initialization (GPT-2 uses 0.02)
+        std = 0.02
         
         # Initialize all GPT parameters
         for name, param in self.xtts.gpt.named_parameters():
-            if 'weight' in name:
+            if param.dim() > 1:  # Only initialize multi-dimensional parameters
                 if 'ln' in name or 'norm' in name:
-                    # Layer normalization weights
-                    nn.init.ones_(param)
-                elif 'embedding' in name:
-                    # Embedding layers
-                    nn.init.normal_(param, mean=0.0, std=0.02)
-                else:
-                    # Linear and convolutional layers
-                    if param.dim() > 1:
-                        nn.init.xavier_normal_(param)
-            elif 'bias' in name:
-                if 'ln' in name or 'norm' in name:
-                    # Layer normalization biases
-                    nn.init.zeros_(param)
-                else:
-                    # Other biases
+                    # Skip layer normalization - they have their own initialization
+                    continue
+                elif 'embedding' in name or 'wte' in name or 'wpe' in name:
+                    # Embedding layers (including position embeddings)
+                    nn.init.normal_(param, mean=0.0, std=std)
+                elif 'latents' in name:
+                    # Perceiver latents
+                    nn.init.normal_(param, mean=0.0, std=std)
+                elif any(x in name for x in ['weight', 'w1', 'w2', 'w3', 'wi', 'wo', 'dense']):
+                    # Linear layers - use normal initialization like GPT-2
+                    nn.init.normal_(param, mean=0.0, std=std)
+                    
+                    # Scale initialization by depth for output projections
+                    if any(x in name for x in ['out_proj', 'o_proj', 'wo', 'dense_4h_to_h', 'c_proj']):
+                        with torch.no_grad():
+                            param *= (2 * self.config.model_args.gpt_layers) ** -0.5
+            elif param.dim() == 1:
+                # Biases - leave as initialized (usually zero)
+                if 'ln' not in name and 'norm' not in name:
                     nn.init.zeros_(param)
         
-        print(">> GPT model initialized from scratch")
+        # Ensure solo embeddings are initialized if they exist
+        if hasattr(self.xtts.gpt, 'mel_solo_embedding'):
+            nn.init.normal_(self.xtts.gpt.mel_solo_embedding, mean=0.0, std=std)
+        if hasattr(self.xtts.gpt, 'text_solo_embedding'):
+            nn.init.normal_(self.xtts.gpt.text_solo_embedding, mean=0.0, std=std)
+        
+        print(">> GPT model initialized from scratch with GPT-2 style initialization")
+        
+        # Debug: Print weight statistics (uncomment for debugging)
+        # self._debug_weight_stats()
 
     def _freeze_vocoder(self):
         """Freeze the HiFiGAN vocoder to prevent training."""
@@ -297,6 +314,34 @@ class GPTTrainer(BaseTTS):
         print(f">> Trainable parameters: {trainable_params:,}")
         print(f">> Frozen parameters: {total_params - trainable_params:,}")
         print(f">> Trainable percentage: {100 * trainable_params / total_params:.2f}%")
+    
+    def _debug_weight_stats(self):
+        """Print statistics about weight initialization for debugging."""
+        print("\n>> Weight initialization statistics:")
+        for name, param in self.xtts.gpt.named_parameters():
+            if param.dim() > 1 and param.requires_grad:
+                mean = param.data.mean().item()
+                std = param.data.std().item()
+                print(f"  {name}: mean={mean:.6f}, std={std:.6f}, shape={list(param.shape)}")
+    
+    def _verify_gpt_initialization(self):
+        """Verify that GPT model is properly initialized."""
+        # Check a few key parameters to ensure they're not zero or NaN
+        critical_params = ['text_embedding.weight', 'mel_embedding.weight', 'text_head.weight', 'mel_head.weight']
+        
+        for param_name in critical_params:
+            found = False
+            for name, param in self.xtts.gpt.named_parameters():
+                if param_name in name:
+                    found = True
+                    if torch.isnan(param).any():
+                        raise ValueError(f"NaN values found in {name}")
+                    if param.abs().max() == 0:
+                        raise ValueError(f"All zero values found in {name}")
+                    break
+            
+            if not found:
+                print(f">> Warning: Could not find parameter {param_name} for verification")
 
     @property
     def device(self):
