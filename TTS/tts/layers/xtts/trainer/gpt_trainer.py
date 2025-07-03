@@ -102,8 +102,15 @@ class GPTTrainer(BaseTTS):
                     vocoder_state[new_key] = value
             
             # Load vocoder weights
-            self.xtts.hifigan_decoder.load_state_dict(vocoder_state, strict=False)
-            print(f">> Loaded {len(vocoder_state)} vocoder parameters from pretrained checkpoint")
+            if vocoder_state:
+                missing_keys, unexpected_keys = self.xtts.hifigan_decoder.load_state_dict(vocoder_state, strict=False)
+                print(f">> Loaded {len(vocoder_state)} vocoder parameters from pretrained checkpoint")
+                if missing_keys:
+                    print(f">> Missing keys in vocoder: {missing_keys[:5]}..." if len(missing_keys) > 5 else f">> Missing keys in vocoder: {missing_keys}")
+                if unexpected_keys:
+                    print(f">> Unexpected keys in vocoder: {unexpected_keys[:5]}..." if len(unexpected_keys) > 5 else f">> Unexpected keys in vocoder: {unexpected_keys}")
+            else:
+                print(">> WARNING: No vocoder weights found in pretrained checkpoint!")
             
             # Initialize GPT model weights from scratch
             self._init_gpt_from_scratch()
@@ -207,7 +214,8 @@ class GPTTrainer(BaseTTS):
             use_transposed_convs=False,
         )
 
-        self.dvae.eval()
+        # Don't put DVAE in eval mode here - even though we freeze its parameters,
+        # gradients still need to flow through it for GPT training
         if self.args.dvae_checkpoint:
             dvae_checkpoint = torch.load(self.args.dvae_checkpoint, map_location=torch.device("cpu"))
             self.dvae.load_state_dict(dvae_checkpoint, strict=False)
@@ -267,12 +275,10 @@ class GPTTrainer(BaseTTS):
         # Put vocoder in eval mode
         self.xtts.hifigan_decoder.eval()
         
-        # Also freeze DVAE since it's not part of the scaling research
-        for param in self.dvae.parameters():
-            param.requires_grad = False
-        self.dvae.eval()
+        # Note: DVAE is already frozen after loading its checkpoint
+        # We don't freeze it here as it's independent of vocoder freezing
         
-        print(">> Vocoder and DVAE frozen")
+        print(">> Vocoder frozen")
         
         # Verify what's trainable
         self._print_trainable_parameters()
@@ -416,18 +422,20 @@ class GPTTrainer(BaseTTS):
         return self.train_step(batch, criterion)
 
     def on_train_epoch_start(self, trainer):
-        trainer.model.eval()  # the whole model to eval
-        # put gpt model in training mode
+        # Only set specific components to their correct modes
+        # Do NOT put the whole model in eval mode as it can interfere with gradient computation
         if hasattr(trainer.model, "module") and hasattr(trainer.model.module, "xtts"):
+            # Multi-GPU setup
             trainer.model.module.xtts.gpt.train()
-            # Ensure vocoder and DVAE stay frozen
+            # Keep vocoder in eval mode when frozen
             trainer.model.module.xtts.hifigan_decoder.eval()
-            trainer.model.module.dvae.eval()
+            # Don't put DVAE in eval mode - gradients need to flow through it
         else:
+            # Single GPU setup
             trainer.model.xtts.gpt.train()
-            # Ensure vocoder and DVAE stay frozen
+            # Keep vocoder in eval mode when frozen
             trainer.model.xtts.hifigan_decoder.eval()
-            trainer.model.dvae.eval()
+            # Don't put DVAE in eval mode - gradients need to flow through it
 
     def on_init_end(self, trainer):  # pylint: disable=W0613
         # ignore similarities.pth on clearml save/upload
